@@ -1,6 +1,6 @@
 # Create an S3 bucket for storing Terraform state
 resource "aws_s3_bucket" "terraform_state" {
-  bucket = "your-unique-bucket-name"
+  bucket = "tf-state-bucket-mperetz2"
   acl    = "private"
 }
 
@@ -18,7 +18,7 @@ resource "aws_dynamodb_table" "terraform_locks" {
 
 terraform {
   backend "s3" {
-    bucket         = "tf-state-bucket-mperetz"
+    bucket         = "tf-state-bucket-mperetz2"
     key            = "terraform/state"
     region         = "us-east-2"
     dynamodb_table = "terraform-locks"
