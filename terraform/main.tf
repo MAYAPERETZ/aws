@@ -101,3 +101,20 @@ resource "aws_iam_role_policy_attachment" "ecs_auto_scailing_attachment" {
   role       = aws_iam_role.ecs_auto_scailing_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole"
 }
+
+module "vpc" {
+  source = "terraform-aws-modules/vpc/aws"
+
+  name = "ecs-mperetz-vpc"
+  cidr = "172.16.0.0/16"
+
+  azs             = ["${var.aws_region}a", "${var.aws_region}b"]
+  public_subnets  = ["172.16.0.0/24", "172.16.0.0/24"]
+
+  create_igw = true
+
+  tags = {
+    Terraform = "true"
+    Environment = "dev"
+  }
+}
