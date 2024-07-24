@@ -4,10 +4,10 @@ name: CI/CD Pipeline
 on:
   push:
     branches:
-      - master
+      - main
 
+jobs:
   deploy:
-    needs: build
     runs-on: ubuntu-latest
 
     steps:
