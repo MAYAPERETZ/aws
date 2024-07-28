@@ -145,6 +145,54 @@ module "ecs_fargate_cluster" {
 
   # Capacity provider - autoscaling groups
   default_capacity_provider_use_fargate = true
+
+  services = {
+    ecsdemo-frontend = {
+      # Container definition(s)
+      container_definitions = {
+
+        wisdom-task-definition = {
+          cpu       = 512
+          memory    = 1024
+          essential = true
+          image     = "pauloclouddev/wisdom-img"
+          port_mappings = [
+            {
+              name          = "ecs-sample"
+              containerPort = 80
+              protocol      = "tcp"
+            }
+          ]
+          requires_compatibilities = ["FARGATE"]
+          network_mode             = "awsvpc"
+        }
+
+      }
+
+
+      subnet_ids =  module.vpc.public_subnets
+      assign_public_ip = true
+      task_exec_iam_role_arn = aws_iam_role.ecs_task_execution_role.arn
+      security_group_rules = {
+        alb_ingress_3000 = {
+          type                     = "ingress"
+          from_port                = 80
+          to_port                  = 80
+          protocol                 = "tcp"
+          description              = "Service port"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+        egress_all = {
+          type        = "egress"
+          from_port   = 0
+          to_port     = 0
+          protocol    = "-1"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      }
+    }
+  }
+
 #   autoscaling_capacity_providers = {
 #     # On-demand instances
 #     ex_1 = {
@@ -160,10 +208,6 @@ module "ecs_fargate_cluster" {
 
   tags = local.tags
 }
-
-################################################################################
-# Service
-################################################################################
 
 
 ################################################################################
