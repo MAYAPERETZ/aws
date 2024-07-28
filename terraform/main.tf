@@ -22,7 +22,7 @@ locals {
   azs      = slice(data.aws_availability_zones.available.names, 0, 3)
 
   container_name = "ecs-sample"
-  container_port = 80
+  container_port = 8000
 
   tags = {
     Name       = local.name
@@ -158,12 +158,79 @@ module "ecs_ec2_cluster" {
     }
   }
 
+  services = {
+    simplehttp = {
+      # Task Definition
+
+      cpu       = 512
+      memory    = 1024
+      requires_compatibilities = ["EC2"]
+      capacity_provider_strategy = {
+        # On-demand instances
+        ex_1 = {
+          capacity_provider = module.ecs_ec2_cluster.autoscaling_capacity_providers["ex_1"].name
+          weight            = 1
+          base              = 1
+        }
+      }
+
+      network_mode = "bridge"
+
+
+      # Container definition(s)
+      container_definitions = {
+        (local.container_name) = {
+          cpu       = 512
+          memory    = 1024
+          image = "gkoenig/simplehttp"
+          port_mappings = [
+            {
+              name          = local.container_name
+              containerPort = 8000
+              protocol      = "tcp"
+            }
+          ]
+
+
+          # Example image used requires access to write to root filesystem
+          readonly_root_filesystem = false
+
+          enable_cloudwatch_logging              = true
+          create_cloudwatch_log_group            = true
+          cloudwatch_log_group_name              = "/aws/ecs/${local.name}/${local.container_name}"
+          cloudwatch_log_group_retention_in_days = 7
+
+          log_configuration = {
+            logDriver = "awslogs"
+          }
+        }
+      }
+
+      load_balancer = {
+        service = {
+          target_group_arn = module.alb.target_groups["ecs_ec2"].arn
+          container_name   = local.container_name
+          container_port   = local.container_port
+        }
+      }
+
+      subnet_ids = module.vpc.public_subnets
+      security_group_rules = {
+        alb_http_ingress = {
+          type                     = "ingress"
+          from_port                = 0
+          to_port                  = 0
+          protocol                 = "tcp"
+          description              = "Service port"
+          source_security_group_id = module.alb.security_group_id
+        }
+      }
+    }
+  }
+
   tags = local.tags
 }
 
-################################################################################
-# Service
-################################################################################
 
 
 ################################################################################
@@ -175,73 +242,134 @@ data "aws_ssm_parameter" "ecs_optimized_ami" {
   name = "/aws/service/ecs/optimized-ami/amazon-linux-2/recommended"
 }
 
-# module "alb" {
-#   source  = "terraform-aws-modules/alb/aws"
-#   version = "~> 9.0"
+module "alb" {
+  source  = "terraform-aws-modules/alb/aws"
 
-#   name = "
+  name = local.name
 
-#   load_balancer_type = "application"
+  load_balancer_type = "application"
 
-#   vpc_id  = module.vpc.vpc_id
-#   subnets = module.vpc.public_subnets
+  vpc_id  = module.vpc.vpc_id
+  subnets = module.vpc.public_subnets
 
-#   # For example only
-#   enable_deletion_protection = false
+  # For example only
+  enable_deletion_protection = false
 
-#   # Security Group
-#   security_group_ingress_rules = {
-#     all_http = {
-#       from_port   = 80
-#       to_port     = 80
-#       ip_protocol = "tcp"
-#       cidr_ipv4   = "0.0.0.0/0"
-#     }
-#   }
-#   security_group_egress_rules = {
-#     all = {
-#       ip_protocol = "-1"
-#       cidr_ipv4   = module.vpc.vpc_cidr_block
-#     }
-#   }
+  # Security Group
+  security_group_ingress_rules = {
+    all_http = {
+      from_port   = 80
+      to_port     = 80
+      ip_protocol = "tcp"
+      cidr_ipv4   = "0.0.0.0/0"
+    }
+  }
+  security_group_egress_rules = {
+    all = {
+      ip_protocol = "-1"
+      cidr_ipv4   = module.vpc.vpc_cidr_block
+    }
+  }
 
-#   listeners = {
-#     ex_http = {
-#       port     = 80
-#       protocol = "HTTP"
+  listeners = {
+    ex_http = {
+      port     = 80
+      protocol = "HTTP"
 
-#       forward = {
-#         target_group_key = "ex_ecs"
-#       }
-#     }
-#   }
+      forward = {
+        target_group_key = "ecs_ec2"
+      }
 
-#   target_groups = {
-#     ex_ecs = {
-#       backend_protocol                  = "HTTP"
-#       backend_port                      = local.container_port
-#       target_type                       = "ip"
-#       deregistration_delay              = 5
-#       load_balancing_cross_zone_enabled = true
+      rules = {
+        forward_ec2 = {
+          priority = 1
+          actions = [{
+              type             = "forward"
+              target_group_key = "ecs_ec2"
+          }]
 
-#       health_check = {
-#         enabled             = true
-#         healthy_threshold   = 5
-#         interval            = 30
-#         matcher             = "200"
-#         path                = "/"
-#         port                = "traffic-port"
-#         protocol            = "HTTP"
-#         timeout             = 5
-#         unhealthy_threshold = 2
-#       }
+          conditions = [{
+            path_pattern = {
+              values = ["/ec2/*"]
+            }
+          }]
+        }
 
-#       # Theres nothing to attach here in this definition. Instead,
-#       # ECS will attach the IPs of the tasks to this target group
-#       create_attachment = false
-#     }
-#   }
+        forward_fargate = {
+          priority = 2
+          actions = [{
+              type             = "forward"
+              target_group_key = "ecs_fargate"
+          }]
 
+          conditions = [{
+            path_pattern = {
+              values = ["/fargate/*"]
+            }
+          }]
+        }
+      }
+    }
+  }
+
+  target_groups = {
+    ecs_ec2 = {
+      backend_protocol                  = "HTTP"
+      backend_port                      = 80
+      target_type                       = "instance"
+      deregistration_delay              = 5
+      load_balancing_cross_zone_enabled = true
+
+      health_check = {
+        enabled             = true
+        healthy_threshold   = 2
+        interval            = 6
+        matcher             = "200"
+        path                = "/"
+        port                = "traffic-port"
+        protocol            = "HTTP"
+        timeout             = 5
+        unhealthy_threshold = 2
+      }
+
+      # Theres nothing to attach here in this definition. Instead,
+      # ECS will attach the IPs of the tasks to this target group
+      create_attachment = false
+    }
+
+    ecs_fargate = {
+      backend_protocol                  = "HTTP"
+      backend_port                      = local.container_port
+      target_type                       = "ip"
+      deregistration_delay              = 5
+      load_balancing_cross_zone_enabled = true
+
+      health_check = {
+        enabled             = true
+        healthy_threshold   = 2
+        interval            = 6
+        matcher             = "200"
+        path                = "/"
+        port                = "traffic-port"
+        protocol            = "HTTP"
+        timeout             = 5
+        unhealthy_threshold = 2
+      }
+
+      # Theres nothing to attach here in this definition. Instead,
+      # ECS will attach the IPs of the tasks to this target group
+      create_attachment = false
+    }
+  }
+
+}
+
+# resource "aws_lb_target_group_attachment" "ex-terraform" {
+#   for_each = {for k,v in module.ec2_example: k => v}
+
+#   target_group_arn = module.alb.target_groups["ecs_ec2"].arn
+#   target_id        = each.value.id
+#   port             = 80
 # }
 
 module "autoscaling" {
@@ -254,7 +382,7 @@ module "autoscaling" {
   for_each = {
     # On-demand instances
     ex_1 = {
-      instance_type              = "t2.micro"
+      instance_type              = "t3.small"
       user_data                  = <<-EOT
         #!/bin/bash
         echo ECS_CLUSTER=${local.name} >> /etc/ecs/ecs.config;
@@ -290,34 +418,28 @@ module "autoscaling" {
 
   # Required for  managed_termination_protection = "ENABLED"
   # protect_from_scale_in = true
-
+  target_group_arns = [module.alb.target_groups["ecs_ec2"].arn]
   tags = local.tags
 }
 
 module "autoscaling_sg" {
   source  = "terraform-aws-modules/security-group/aws"
-  version = "~> 5.0"
 
   name        = local.name
   description = "Autoscaling group security group"
   vpc_id      = module.vpc.vpc_id
 
-#   computed_ingress_with_source_security_group_id = [
-#     {
-#       rule                     = "http-80-tcp"
-#       source_security_group_id = module.alb.security_group_id
-#     }
-#   ]
-#   number_of_computed_ingress_with_source_security_group_id = 1
+
+  computed_ingress_with_source_security_group_id = [
+    {
+      rule                     = "all-tcp"
+      source_security_group_id = module.alb.security_group_id
+    }
+  ]
+  number_of_computed_ingress_with_source_security_group_id = 1
 
   egress_rules = ["all-all"]
 
-  ingress_with_self = [{
-    protocol   = "-1" # -1 specifies all protocols
-    from_port  = 0    # from_port and to_port are not required for all protocols
-    to_port    = 0    # but set to 0 for clarity
-    description = "Allow all traffic within the security group"
-  }]
   
   tags = local.tags
 }
